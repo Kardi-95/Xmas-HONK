@@ -1,0 +1,9 @@
+{
+  "chapterId": "chapter_xmas_01",
+  "obstacles": {
+    "variants": [
+      { "id": "chimney_normal", "weight": 0.6 },
+      { "id": "chimney_fire", "weight": 0.4 }
+    ]
+  }
+}
