@@ -1,0 +1,297 @@
+const CONFIG_URL = "./chapter_xmas_01.json";
+
+async function loadChapter() {
+  const res = await fetch(CONFIG_URL);
+  if (!res.ok) throw new Error("Chapter JSON not found: " + CONFIG_URL);
+  return res.json();
+}
+
+const chapter = await loadChapter();
+
+const W = 480;
+const H = 800;
+
+class PlayScene extends Phaser.Scene {
+  constructor() {
+    super("play");
+    this.score = 0;
+    this.dead = false;
+    this.started = false;
+    this.muted = false;
+  }
+
+  preload() {
+    // visuals
+    this.load.image("bg", "./assets/bg.png");
+    this.load.image("player", "./assets/player.png");
+    this.load.image("chimney", "./assets/chimney.png");
+    this.load.image("chimney_fire", "./assets/chimney_fire.png");
+    this.load.image("cookie", "./assets/cookie.png");
+    this.load.image("snow", "./assets/snow.png");
+
+    // audio
+    this.load.audio("music", "./assets/music_xmas_8bit_loop.wav");
+    this.load.audio("sfx_flap", "./assets/sfx_flap.wav");
+    this.load.audio("sfx_cookie", "./assets/sfx_cookie.wav");
+    this.load.audio("sfx_death", "./assets/sfx_death.wav");
+    this.load.audio("sfx_score", "./assets/sfx_score.wav");
+  }
+
+  create() {
+    const base = chapter.difficulty?.base ?? {};
+
+    // BG
+    this.bg = this.add.tileSprite(W / 2, H / 2, W, H, "bg");
+
+    // Snow particles
+    const particles = this.add.particles(0, 0, "snow", {
+      x: { min: 0, max: W },
+      y: { min: -10, max: 0 },
+      lifespan: { min: 4000, max: 7000 },
+      speedY: { min: 60, max: 140 },
+      speedX: { min: -20, max: 20 },
+      scale: { min: 0.4, max: 1.0 },
+      alpha: { min: 0.4, max: 0.9 },
+      quantity: 2,
+      frequency: 60,
+      blendMode: "NORMAL"
+    });
+    particles.setDepth(5);
+
+    // Physics bounds
+    this.physics.world.setBounds(0, 0, W, H);
+
+    // Player
+    this.player = this.physics.add.sprite(140, H / 2, "player");
+    this.player.setScale(0.75);
+    this.player.setCollideWorldBounds(true);
+
+    // START STATE: no gravity until first tap
+    this.player.body.setAllowGravity(false);
+    this.player.setVelocity(0, 0);
+
+    // Groups
+    this.obstacles = this.physics.add.group();
+    this.cookies = this.physics.add.group();
+
+    // UI
+    this.scoreText = this.add.text(16, 16, "0", {
+      fontFamily: "monospace",
+      fontSize: "30px",
+      color: "#ffffff"
+    });
+
+    this.titleText = this.add.text(W/2, 170, "HO-HO-HONK!", {
+      fontFamily: "monospace",
+      fontSize: "38px",
+      color: "#ffffff"
+    }).setOrigin(0.5);
+
+    this.subText = this.add.text(W/2, 230, "Click / SPACE to Start", {
+      fontFamily: "monospace",
+      fontSize: "22px",
+      color: "#ffffff"
+    }).setOrigin(0.5).setAlpha(0.85);
+
+    this.tweens.add({
+      targets: this.subText,
+      alpha: 0.25,
+      duration: 700,
+      yoyo: true,
+      repeat: -1
+    });
+
+    // Audio
+    this.music = this.sound.add("music", { loop: true, volume: 0.35 });
+    this.sfx = {
+      flap: this.sound.add("sfx_flap", { volume: 0.35 }),
+      cookie: this.sound.add("sfx_cookie", { volume: 0.45 }),
+      death: this.sound.add("sfx_death", { volume: 0.5 }),
+      score: this.sound.add("sfx_score", { volume: 0.35 })
+    };
+
+    // Input
+    this.input.on("pointerdown", () => this.onAction());
+    this.input.keyboard.on("keydown-SPACE", () => this.onAction());
+
+    // Mute toggle
+    this.input.keyboard.on("keydown-M", () => {
+      this.muted = !this.muted;
+      this.sound.mute = this.muted;
+    });
+
+    // Collisions
+    this.physics.add.overlap(this.player, this.obstacles, () => this.die(), null, this);
+    this.physics.add.overlap(this.player, this.cookies, (p, c) => {
+      c.destroy();
+      this.score += 1;
+      this.scoreText.setText(String(this.score));
+      if (!this.muted) this.sfx.cookie.play();
+    }, null, this);
+
+    // Spawn timer (paused until start)
+    this.spawnTimer = this.time.addEvent({
+      delay: 1200,
+      loop: true,
+      paused: true,
+      callback: () => this.spawnPair()
+    });
+  }
+
+  startGame() {
+    if (this.started) return;
+    this.started = true;
+
+    // enable gravity and begin
+    const base = chapter.difficulty?.base ?? {};
+    this.player.body.setAllowGravity(true);
+    this.player.body.setGravityY(820 * (base.gravity ?? 1.0));
+
+    this.titleText.destroy();
+    this.subText.destroy();
+
+    this.spawnTimer.paused = false;
+
+    if (!this.muted) this.music.play();
+
+    // give a tiny initial nudge so it doesn't instantly drop like a rock
+    this.player.setVelocityY(-180);
+  }
+
+  onAction() {
+    if (this.dead) return;
+    if (!this.started) {
+      this.startGame();
+      return;
+    }
+    this.flap();
+  }
+
+  getRamped() {
+    const base = chapter.difficulty?.base ?? {};
+    const ramp = chapter.difficulty?.ramp ?? {};
+    const steps = Math.floor((this.score || 0) / (ramp.everyScore ?? 10));
+
+    const scrollSpeed = Math.min(
+      (base.scrollSpeed ?? 3.0) + steps * (ramp.scrollSpeedAdd ?? 0.12),
+      ramp.maxScrollSpeed ?? 4.2
+    );
+
+    const obstacleGap = Math.max(
+      (base.obstacleGap ?? 155) - steps * (ramp.gapSubtract ?? 4),
+      ramp.minGap ?? 130
+    );
+
+    return { scrollSpeed, obstacleGap };
+  }
+
+  flap() {
+    const base = chapter.difficulty?.base ?? {};
+    const flapStrength = base.flapStrength ?? 8.35;
+
+    // IMPORTANT FIX: previously too strong. Keep it short + snappy.
+    // This scales to a small impulse; tweak multiplier if needed.
+    const impulse = -flapStrength * 28; // was *60-ish in older build
+    this.player.setVelocityY(impulse);
+
+    if (!this.muted) this.sfx.flap.play();
+  }
+
+  spawnPair() {
+    if (!this.started || this.dead) return;
+
+    const { scrollSpeed, obstacleGap } = this.getRamped();
+
+    const centerY = Phaser.Math.Between(240, H - 240);
+    const topY = centerY - obstacleGap / 2 - 300;
+    const botY = centerY + obstacleGap / 2 + 300;
+
+    const variantId = pickVariantId(chapter.obstacles?.variants ?? []);
+    const tex = (variantId === "chimney_fire") ? "chimney_fire" : "chimney";
+
+    const top = this.obstacles.create(W + 70, topY, tex);
+    const bot = this.obstacles.create(W + 70, botY, tex);
+
+    [top, bot].forEach(o => {
+      o.setImmovable(true);
+      o.body.allowGravity = false;
+      o.setVelocityX(-scrollSpeed * 115);
+      o.setData("scorable", true);
+    });
+
+    // cookie spawn
+    const cookieChance = (chapter.collectibles ?? []).find(x => x.id === "cookie_coin")?.spawn?.chance ?? 0.28;
+    if (Math.random() < cookieChance) {
+      const cookie = this.cookies.create(W + 70, centerY, "cookie");
+      cookie.body.allowGravity = false;
+      cookie.setVelocityX(-scrollSpeed * 115);
+    }
+  }
+
+  update() {
+    if (!this.started || this.dead) return;
+
+    const { scrollSpeed } = this.getRamped();
+    this.bg.tilePositionX += scrollSpeed * 1.4;
+
+    // score when passing bottom chimney
+    this.obstacles.children.each((o) => {
+      if (!o.active) return;
+      if (o.getData("scorable") && o.x < this.player.x) {
+        o.setData("scorable", false);
+        if (o.y > H/2) {
+          this.score += 1;
+          this.scoreText.setText(String(this.score));
+          if (!this.muted) this.sfx.score.play();
+        }
+      }
+      if (o.x < -140) o.destroy();
+    });
+
+    this.cookies.children.each((c) => {
+      if (c.active && c.x < -140) c.destroy();
+    });
+  }
+
+  die() {
+    if (this.dead) return;
+    this.dead = true;
+    this.spawnTimer.paused = true;
+
+    if (!this.muted) this.sfx.death.play();
+    this.music.stop();
+
+    this.player.setTint(0xff4d4d);
+    this.player.setVelocity(0, 0);
+
+    const panel = this.add.rectangle(W/2, H/2, 380, 250, 0x000000, 0.6).setStrokeStyle(2, 0xffffff, 0.35);
+    const txt = this.add.text(W/2, H/2 - 10, `GAME OVER\nScore: ${this.score}\n\nClick to retry`, {
+      fontFamily: "monospace",
+      fontSize: "26px",
+      color: "#ffffff",
+      align: "center"
+    }).setOrigin(0.5);
+
+    this.input.once("pointerdown", () => this.scene.restart());
+  }
+}
+
+function pickVariantId(variants) {
+  if (!variants.length) return "chimney_normal";
+  const total = variants.reduce((s, v) => s + (v.weight ?? 0), 0);
+  let r = Math.random() * total;
+  for (const v of variants) {
+    r -= (v.weight ?? 0);
+    if (r <= 0) return v.id;
+  }
+  return variants[0].id;
+}
+
+new Phaser.Game({
+  type: Phaser.AUTO,
+  width: W,
+  height: H,
+  backgroundColor: "#081426",
+  physics: { default: "arcade" },
+  scene: [PlayScene]
+});
