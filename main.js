@@ -1,3 +1,4 @@
+// deploy bump v3
 const CONFIG_URL = "./chapter_xmas_01.json";
 
 async function loadChapter() {
