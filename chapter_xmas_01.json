@@ -45,7 +45,8 @@
       },
       {
         "id": "chimney_fire",
-        "weight": 0.22
+        "weight": 0.5 }
+
       }
     ]
   },
